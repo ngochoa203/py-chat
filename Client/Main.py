@@ -1,6 +1,7 @@
+import os
 import sys
 import socket
-from PyQt5.QtWidgets import QApplication, QMainWindow, QInputDialog, QLabel, QMessageBox
+from PyQt5.QtWidgets import QApplication, QMainWindow, QInputDialog, QLabel, QMessageBox, QFileDialog
 from PyQt5.QtCore import Qt, pyqtSignal, QThread, QTimer
 from PyQt5 import QtWidgets, QtCore
 from PyQt5.uic import loadUi
@@ -73,6 +74,7 @@ class MainChat(QMainWindow):
         self.btnSend.clicked.connect(self.send_message)
         self.btnAddFriend.clicked.connect(self.add_friend)
         self.btnCallVideo.clicked.connect(self.start_call_video)
+        self.btnSendFile.clicked.connect(self.send_file_dialog)
         self.listFriends.itemClicked.connect(self.handle_friend_click)
         self.load_friends_list()
         self.friend_name = None
@@ -81,7 +83,29 @@ class MainChat(QMainWindow):
         self.message_thread.messages_received.connect(self.handle_messages_received)
         self.update_messages_signal.connect(self.display_messages)
         self.message_thread.start()
-    
+        
+    def send_file_dialog(self):
+        file_dialog = QFileDialog()
+        file_path, _ = file_dialog.getOpenFileName(self, "Select File to Send")
+        if file_path:
+            self.send_file(file_path)
+    def send_file(self, file_path):
+        try:
+            with open(file_path, 'rb') as file:
+                file_data = file.read()
+                file_name = os.path.basename(file_path)
+                message = f"send_file|{self.username}|{self.friend_name}|{file_name}|{len(file_data)}"
+                self.client_socket.send(message.encode())
+                response = self.client_socket.recv(1024).decode()
+                print(f"Response from server: {response}")
+                if response == "ready_to_receive":
+                    self.client_socket.send(file_data)
+                    QMessageBox.information(self, "File Sent", f"File '{file_name}' sent successfully!")
+                else:
+                    QMessageBox.warning(self, "Error", f"Failed to send file: {response}")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Error sending file: {str(e)}")
+            
     def start_call_video(self):
         friend_name = self.txtNameFriend.text()
         print(f"Trying to start a video call with {friend_name}")
@@ -123,7 +147,6 @@ class MainChat(QMainWindow):
             elif sender == "reject":
                 print(f"{self.username} rejects the call from {receiver}")
                 # Handle rejection if needed
-
 
     def send_message(self):
         friend_name = self.txtNameFriend.text()
