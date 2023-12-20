@@ -2,6 +2,7 @@ import socket
 import threading
 import sys
 import os
+import time
 from PyQt5.QtWidgets import QApplication, QMainWindow, QInputDialog, QFileDialog
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.uic import loadUi
@@ -28,7 +29,24 @@ class ServerApp(QMainWindow):
         self.load_user_list()
         self.lock = threading.Lock()
         self.current_username = None
+        
+    def get_messages(self, sender, receiver):
+        messages = FirestoreOperations.get_messages(sender, receiver)
+        messages_data = ";".join([f"{msg['sender']}|{msg['message']}|{msg['message_type']}|{msg['timestamp']}" for msg in messages])
+        return messages_data
 
+    def send_message(self, sender, receiver, message, message_type, timestamp, sender_socket):
+        try:
+            FirestoreOperations.save_message(sender, receiver, message, message_type, timestamp)
+            if receiver in self.client_sockets:
+                with self.lock:
+                    receiving_socket = self.client_sockets[receiver]
+                    receiving_socket.send(f"received_message|{sender}|{message}|{message_type}|{timestamp}".encode())
+                    receiving_socket.send(f"get_messages|{sender}|{receiver}".encode())
+                sender_socket.send(f"send_message|{sender}|{message}|{message_type}|{timestamp}".encode())
+        except Exception as e:
+            self.txtDisplayMsg.append(f"Error sending message: {str(e)}")
+            
     def handle_video_call_request(self, sender, receiver, client_socket):
         print(f"Video request: {self.client_sockets}")
         if receiver in self.client_sockets:
@@ -60,15 +78,22 @@ class ServerApp(QMainWindow):
             client_socket.send(response_message.encode())
 
             file_data = client_socket.recv(file_size)
-            file_path = os.path.join("Server/ServerData", file_name)
+            file_path = os.path.join(SERVER_DATA_DIR, file_name)
 
             with open(file_path, 'wb') as file:
                 file.write(file_data)
 
             print(f"File '{file_name}' received from {sender} and saved to {file_path}")
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            message = f"{file_name}"
+            message_type = "file"
+            FirestoreOperations.save_message(sender, receiver, message, message_type, timestamp)
+            if receiver in self.client_sockets:
+                receiving_socket = self.client_sockets[receiver]
+                receiving_socket.send(f"file_received|{sender}|{file_name}".encode())
+
         except Exception as e:
             print(f"Error handling file transfer: {str(e)}")
-
 
     def start_server(self):
         port = int(self.txtPort.text())
@@ -92,7 +117,6 @@ class ServerApp(QMainWindow):
                     self.client_sockets[username] = client_socket
                     self.txtDisplayMsg.append(f"Accepted connection from {client_address} with username {username}")
                     threading.Thread(target=self.handle_client, args=(client_socket,)).start()
-                else: threading.Thread(target=self.handle_client, args=(client_socket,)).start()
             except Exception as e:
                 if self.server_listening:
                     self.txtDisplayMsg.append(f"Error accepting connection: {str(e)}")
@@ -146,8 +170,8 @@ class ServerApp(QMainWindow):
                         client_socket.send(response.encode('utf-8'))
 
                     elif parts[0] == "send_message":
-                        sender, receiver, message, timestamp = parts[1], parts[2], parts[3], parts[4]
-                        self.send_message(sender, receiver, message, timestamp, client_socket)
+                        sender, receiver, message, message_type, timestamp = parts[1], parts[2], parts[3], parts[4], parts[5]
+                        self.send_message(sender, receiver, message, message_type, timestamp, client_socket)
 
                     elif parts[0] == "get_messages":
                         sender, receiver = parts[1], parts[2]
@@ -182,24 +206,6 @@ class ServerApp(QMainWindow):
         response = FirestoreOperations.get_friends_list(username)
         client_socket.send(response.encode('utf-8'))
         return response
-
-    def get_messages(self, sender, receiver):
-        messages = FirestoreOperations.get_messages(sender, receiver)
-        messages_data = ";".join([f"{msg['sender']}|{msg['message']}|{msg['timestamp']}" for msg in messages])
-        return messages_data
-
-    def send_message(self, sender, receiver, message, timestamp, sender_socket):
-        try:
-            FirestoreOperations.save_message(sender, receiver, message, timestamp)
-
-            if receiver in self.client_sockets:
-                with self.lock:
-                    receiving_socket = self.client_sockets[receiver]
-                    receiving_socket.send(f"received_message|{sender}|{message}|{timestamp}".encode())
-                    receiving_socket.send(f"get_messages|{sender}|{receiver}".encode())
-                sender_socket.send(f"sent_message|{sender}|{message}|{timestamp}".encode())
-        except Exception as e:
-            self.txtDisplayMsg.append(f"Error sending message: {str(e)}")
 
     def stop_server(self):
         try:

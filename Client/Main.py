@@ -3,7 +3,7 @@ import sys
 import socket
 from PyQt5.QtWidgets import QApplication, QMainWindow, QInputDialog, QLabel, QMessageBox, QFileDialog
 from PyQt5.QtCore import Qt, pyqtSignal, QThread, QTimer
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.uic import loadUi
 from CallVideo import CallVideo
 
@@ -89,6 +89,7 @@ class MainChat(QMainWindow):
         file_path, _ = file_dialog.getOpenFileName(self, "Select File to Send")
         if file_path:
             self.send_file(file_path)
+            
     def send_file(self, file_path):
         try:
             with open(file_path, 'rb') as file:
@@ -105,7 +106,23 @@ class MainChat(QMainWindow):
                     QMessageBox.warning(self, "Error", f"Failed to send file: {response}")
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Error sending file: {str(e)}")
-            
+    def download_file(self, sender, file_name):
+        save_path, _ = QFileDialog.getSaveFileName(self, "Save File", file_name)
+        if save_path:
+            try:
+                # Gửi yêu cầu tải file đến server
+                self.client_socket.send(f"download_file|{self.username}|{sender}|{file_name}".encode())
+
+                # Nhận dữ liệu file từ server
+                file_data = self.client_socket.recv(1024)
+
+                # Lưu dữ liệu file vào đường dẫn đã chọn
+                with open(save_path, 'wb') as file:
+                    file.write(file_data)
+
+                QMessageBox.information(self, "File Downloaded", f"File '{file_name}' downloaded successfully!")
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Error downloading file: {str(e)}")
     def start_call_video(self):
         friend_name = self.txtNameFriend.text()
         print(f"Trying to start a video call with {friend_name}")
@@ -123,7 +140,7 @@ class MainChat(QMainWindow):
             self.update_messages_signal.emit(messages_data)
 
     def handle_video_call_request(self, sender, receiver):
-        if receiver == self.username:  # Check if the request is for the current user
+        if receiver == self.username:
             response = QMessageBox.question(
                 self, "Video Call Request", f"Do you want to accept a video call from {sender}?", 
                 QMessageBox.Yes | QMessageBox.No
@@ -151,8 +168,9 @@ class MainChat(QMainWindow):
     def send_message(self):
         friend_name = self.txtNameFriend.text()
         message = self.txtMsg.text()
+        message_type = 'text'
         timestamp = QtCore.QDateTime.currentDateTime().toString(Qt.DefaultLocaleLongDate)
-        self.client_socket.send(f"send_message|{self.username}|{friend_name}|{message}|{timestamp}".encode())
+        self.client_socket.send(f"send_message|{self.username}|{friend_name}|{message}|{message_type}|{timestamp}".encode())
         self.add_message("You", message, timestamp)
         self.txtMsg.clear()
         self.listMsg.scrollToBottom()
@@ -205,19 +223,20 @@ class MainChat(QMainWindow):
     def display_messages(self, messages_data):
         messages_list = messages_data.split(";")
         current_items_amount = self.listMsg.count()
-
         if len(messages_list) != current_items_amount:
             self.listMsg.clear()
             for message in messages_list:
                 if message:
                     message_parts = message.split("|")
-                    if len(message_parts) == 3:
-                        sender, message_text, timestamp = message_parts
+                    if len(message_parts) >= 3:
+                        sender, message_text, timestamp = message_parts[:3]
+                        message_type = message_parts[3] if len(message_parts) >= 4 else "text"
                         received_message = sender != self.username
-                        self.add_message(sender, message_text, timestamp, received_message)
+                        self.add_message(sender, message_text, message_type, timestamp, received_message)
                         self.listMsg.scrollToBottom()
+                        print(f"Added message: {sender}, {message_text}, {message_type}, {timestamp}, {received_message}")
 
-    def add_message(self, sender, message, timestamp, received_message=False):
+    def add_message(self, sender, message, timestamp, message_type, received_message=False):
         item = QtWidgets.QListWidgetItem(self.listMsg)
         item.setSizeHint(QtCore.QSize(150, 150))
         widget = QtWidgets.QWidget(self.listMsg)
@@ -227,23 +246,50 @@ class MainChat(QMainWindow):
         chat_bubble.setStyleSheet(
             "background-color: #E1FFC7; border: 1px solid #E1FFC7; border-radius: 15px; padding: 10px;"
         )
+
         if received_message:
             avatar_label = self.create_avatar_label(sender)
             chat_layout.addWidget(avatar_label)
             QtWidgets.QApplication.processEvents()
+
         message_container = QtWidgets.QWidget()
         message_container_layout = QtWidgets.QVBoxLayout(message_container)
-        message_label = self.create_message_label(message)
-        timestamp_label = self.create_timestamp_label(timestamp)
-        message_container_layout.addWidget(message_label)
-        message_container_layout.addWidget(timestamp_label)
-        chat_layout.addWidget(message_container)
+        print(message_type)
+        try:
+            if message_type == "text":
+                message_label = self.create_message_label(message)
+                timestamp_label = self.create_timestamp_label(timestamp)
+                message_container_layout.addWidget(message_label)
+                message_container_layout.addWidget(timestamp_label)
+            elif message_type == "file":
+                message_label = self.create_message_label(message)
+                timestamp_label = self.create_timestamp_label(timestamp)
+                download_icon = self.create_download_icon_label(message)
+                message_container_layout.addWidget(message_label)
+                message_container_layout.addWidget(download_icon)
+                message_container_layout.addWidget(timestamp_label)
+                download_icon.mousePressEvent = lambda event: self.download_file(sender, message)
+            chat_layout.addWidget(message_container)
 
-        if not received_message:
-            layout.addStretch(1)
-        layout.addWidget(chat_bubble)
-        self.listMsg.addItem(item)
-        self.listMsg.setItemWidget(item, widget)
+            if not received_message:
+                layout.addStretch(1)
+
+            layout.addWidget(chat_bubble)
+            self.listMsg.addItem(item)
+            self.listMsg.setItemWidget(item, widget)
+        except Exception as e:
+            print(f"Error adding message: {str(e)}")
+
+    def create_download_icon_label(self, file_name):
+        try:
+            download_icon = QtWidgets.QLabel()
+            download_icon.setPixmap(QtGui.QPixmap(".\\Icon\iconDownload.png"))
+            download_icon.setToolTip(f"Download {file_name}")
+            download_icon.setAlignment(QtCore.Qt.AlignCenter)
+            return download_icon
+        except Exception as e:
+            print(f"Error creating download icon label: {str(e)}")
+            return QtWidgets.QLabel("Error creating label")
 
     def load_friend_widget(self, friend_name):
         item = QtWidgets.QListWidgetItem()

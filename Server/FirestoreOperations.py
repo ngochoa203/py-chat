@@ -55,7 +55,7 @@ class FirestoreOperations:
             return "No friends found."
 
     @staticmethod
-    def save_message(sender, receiver, message, timestamp):
+    def save_message(sender, receiver, message, message_type, timestamp):
         try:
             conversation_id = '-'.join(sorted([sender, receiver]))
             messages_ref = db.collection("Messages").document(conversation_id)
@@ -69,6 +69,7 @@ class FirestoreOperations:
                         "sender": sender,
                         "receiver": receiver,
                         "message": message,
+                        "message_type": message_type,
                         "timestamp": timestamp
                     },
                     "order": current_order + 1
@@ -81,6 +82,7 @@ class FirestoreOperations:
                         "sender": sender,
                         "receiver": receiver,
                         "message": message,
+                        "message_type": message_type,
                         "timestamp": timestamp
                     },
                     "order": 1
